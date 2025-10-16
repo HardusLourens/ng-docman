@@ -1,0 +1,262 @@
+<mat-card class="ai-assistant-card">
+  <mat-card-header>
+    <mat-card-title>
+      <mat-icon>psychology</mat-icon>
+      AI Writing Assistant
+    </mat-card-title>
+  </mat-card-header>
+
+  <mat-card-content>
+    <mat-tab-group [(selectedIndex)]="selectedTabIndex" class="ai-tabs">
+      
+      <!-- Suggestions Tab -->
+      <mat-tab label="Suggestions">
+        <div class="tab-content">
+          <div class="input-section">
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Selected Text</mat-label>
+              <textarea 
+                matInput 
+                [(ngModel)]="selectedText" 
+                placeholder="Select text from your document or paste it here"
+                rows="3">
+              </textarea>
+            </mat-form-field>
+            
+            <button 
+              mat-raised-button 
+              color="primary" 
+              (click)="getSuggestions()"
+              [disabled]="suggestionsLoading">
+              <mat-icon>auto_fix_high</mat-icon>
+              Get Suggestions
+            </button>
+          </div>
+
+          <mat-progress-bar 
+            *ngIf="suggestionsLoading" 
+            mode="indeterminate">
+          </mat-progress-bar>
+
+          <div *ngIf="suggestions.length > 0" class="suggestions-list">
+            <h4>Writing Suggestions:</h4>
+            <div *ngFor="let suggestion of suggestions" class="suggestion-item">
+              <mat-card class="suggestion-card">
+                <mat-card-content>
+                  <div class="suggestion-header">
+                    <mat-chip [color]="getSuggestionTypeColor(suggestion.type)">
+                      {{ suggestion.type | titlecase }}
+                    </mat-chip>
+                    <span class="reason">{{ suggestion.reason }}</span>
+                  </div>
+                  
+                  <div class="suggestion-content">
+                    <div class="original">
+                      <strong>Original:</strong> {{ suggestion.original }}
+                    </div>
+                    <mat-icon class="arrow">arrow_downward</mat-icon>
+                    <div class="suggestion">
+                      <strong>Suggested:</strong> {{ suggestion.suggestion }}
+                    </div>
+                  </div>
+                  
+                  <button 
+                    mat-raised-button 
+                    color="accent" 
+                    size="small"
+                    (click)="applySuggestion(suggestion)">
+                    <mat-icon>check</mat-icon>
+                    Apply
+                  </button>
+                </mat-card-content>
+              </mat-card>
+            </div>
+          </div>
+        </div>
+      </mat-tab>
+
+      <!-- Generate Tab -->
+      <mat-tab label="Generate">
+        <div class="tab-content">
+          <div class="input-section">
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>What would you like to generate?</mat-label>
+              <textarea 
+                matInput 
+                [(ngModel)]="generatePrompt" 
+                placeholder="Describe what you want to generate..."
+                rows="2">
+              </textarea>
+            </mat-form-field>
+            
+            <mat-form-field appearance="outline">
+              <mat-label>Type</mat-label>
+              <mat-select [(ngModel)]="generateType">
+                <mat-option value="paragraph">Paragraph</mat-option>
+                <mat-option value="introduction">Introduction</mat-option>
+                <mat-option value="conclusion">Conclusion</mat-option>
+                <mat-option value="outline">Outline</mat-option>
+              </mat-select>
+            </mat-form-field>
+            
+            <button 
+              mat-raised-button 
+              color="primary" 
+              (click)="generateContent()"
+              [disabled]="generateLoading">
+              <mat-icon>auto_awesome</mat-icon>
+              Generate
+            </button>
+          </div>
+
+          <mat-progress-bar 
+            *ngIf="generateLoading" 
+            mode="indeterminate">
+          </mat-progress-bar>
+
+          <div *ngIf="generatedContent" class="generated-content">
+            <h4>Generated Content:</h4>
+            <mat-card class="content-card">
+              <mat-card-content>
+                <div class="content-text">{{ generatedContent }}</div>
+                <button 
+                  mat-raised-button 
+                  color="accent" 
+                  (click)="insertGeneratedContent()">
+                  <mat-icon>add</mat-icon>
+                  Insert into Document
+                </button>
+              </mat-card-content>
+            </mat-card>
+          </div>
+        </div>
+      </mat-tab>
+
+      <!-- Chat Tab -->
+      <mat-tab label="Chat">
+        <div class="tab-content">
+          <div class="chat-container">
+            <div class="chat-messages">
+              <div *ngIf="chatHistory.length === 0" class="no-messages">
+                <mat-icon>chat_bubble_outline</mat-icon>
+                <p>Start a conversation about your document!</p>
+              </div>
+              
+              <div *ngFor="let message of chatHistory" class="chat-message" [ngClass]="message.role">
+                <div class="message-content">
+                  <div class="message-header">
+                    <mat-icon *ngIf="message.role === 'user'">person</mat-icon>
+                    <mat-icon *ngIf="message.role === 'assistant'">smart_toy</mat-icon>
+                    <span class="timestamp">{{ formatTimestamp(message.timestamp) }}</span>
+                  </div>
+                  <div class="message-text">{{ message.content }}</div>
+                </div>
+              </div>
+              
+              <mat-progress-bar 
+                *ngIf="chatLoading" 
+                mode="indeterminate">
+              </mat-progress-bar>
+            </div>
+            
+            <div class="chat-input">
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Ask about your document...</mat-label>
+                <textarea 
+                  matInput 
+                  [(ngModel)]="chatMessage" 
+                  placeholder="Ask questions, get suggestions, or brainstorm ideas..."
+                  rows="2"
+                  (keydown.enter)="sendChatMessage()">
+                </textarea>
+              </mat-form-field>
+              
+              <div class="chat-actions">
+                <button 
+                  mat-raised-button 
+                  color="primary" 
+                  (click)="sendChatMessage()"
+                  [disabled]="chatLoading">
+                  <mat-icon>send</mat-icon>
+                  Send
+                </button>
+                <button 
+                  mat-button 
+                  (click)="clearChat()">
+                  <mat-icon>clear_all</mat-icon>
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </mat-tab>
+
+      <!-- Analysis Tab -->
+      <mat-tab label="Analysis">
+        <div class="tab-content">
+          <div class="analysis-section">
+            <button 
+              mat-raised-button 
+              color="primary" 
+              (click)="analyzeDocument()"
+              [disabled]="analysisLoading">
+              <mat-icon>analytics</mat-icon>
+              Analyze Document
+            </button>
+          </div>
+
+          <mat-progress-bar 
+            *ngIf="analysisLoading" 
+            mode="indeterminate">
+          </mat-progress-bar>
+
+          <div *ngIf="analysis" class="analysis-results">
+            <mat-card class="analysis-card">
+              <mat-card-header>
+                <mat-card-title>Document Analysis</mat-card-title>
+              </mat-card-header>
+              <mat-card-content>
+                <div class="analysis-section">
+                  <h4>Summary</h4>
+                  <p>{{ analysis.summary }}</p>
+                </div>
+                
+                <div class="analysis-section">
+                  <h4>Key Points</h4>
+                  <ul>
+                    <li *ngFor="let point of analysis.keyPoints">{{ point }}</li>
+                  </ul>
+                </div>
+                
+                <div class="analysis-section">
+                  <h4>Suggestions</h4>
+                  <ul>
+                    <li *ngFor="let suggestion of analysis.suggestions">{{ suggestion }}</li>
+                  </ul>
+                </div>
+                
+                <div class="analysis-stats">
+                  <div class="stat-item">
+                    <mat-icon>description</mat-icon>
+                    <span>{{ analysis.wordCount }} words</span>
+                  </div>
+                  <div class="stat-item">
+                    <mat-icon>schedule</mat-icon>
+                    <span>{{ analysis.estimatedReadTime }} min read</span>
+                  </div>
+                  <div class="stat-item">
+                    <mat-icon>text_fields</mat-icon>
+                    <span>{{ analysis.readability }}</span>
+                  </div>
+                </div>
+              </mat-card-content>
+            </mat-card>
+          </div>
+        </div>
+      </mat-tab>
+
+    </mat-tab-group>
+  </mat-card-content>
+</mat-card>
+

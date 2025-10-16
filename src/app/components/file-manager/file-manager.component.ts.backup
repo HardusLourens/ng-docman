@@ -1,0 +1,333 @@
+import { Component, Input, OnInit, OnDestroy } from '@angular/core';
+import { FileService } from '../../services/file.service';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { AuthService } from '../../auth/auth.service';
+import { MatCardModule } from '@angular/material/card';
+import { MatButtonModule } from '@angular/material/button';
+import { MatInputModule } from '@angular/material/input';
+import { MatListModule } from '@angular/material/list';
+import { MatIconModule } from '@angular/material/icon';
+import { MatSnackBarModule } from '@angular/material/snack-bar';
+import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatTabsModule } from '@angular/material/tabs';
+import { SocketService } from '../../services/socket.service';
+import { Subscription } from 'rxjs';
+import { MatSnackBar } from '@angular/material/snack-bar';
+import { HttpClient } from '@angular/common/http';
+import { AIAssistantComponent } from '../ai-assistant/ai-assistant.component';
+
+@Component({
+  selector: 'app-file-manager',
+  templateUrl: './file-manager.component.html',
+  styleUrls: ['./file-manager.component.scss'],
+  imports: [CommonModule, FormsModule,  MatCardModule,
+    MatInputModule,
+    MatButtonModule,
+    MatListModule,
+    MatIconModule,
+    MatSnackBarModule,
+    MatTooltipModule,
+    MatTabsModule,
+    AIAssistantComponent],
+  standalone: true
+})
+export class FileManagerComponent implements OnInit, OnDestroy {
+  files: any[] = [];
+  fileName = '';
+  fileContent = '';
+  selectedFileId: string | null | undefined = null;
+  isEditMode = false;
+  private socketSubscription: Subscription | null = null;
+  private authSubscription: Subscription | null = null;
+  private fileCreatedSubscription: Subscription | null = null;
+  private fileDeletedSubscription: Subscription | null = null;
+  showAIAssistant = false;
+
+  @Input() showAllFiles = false;
+
+  constructor(
+    private fileService: FileService, 
+    public authService: AuthService,
+    private socketService: SocketService,
+    private snackBar: MatSnackBar,
+    private http: HttpClient
+  ) {}
+
+  ngOnInit() {
+    // Subscribe to user auth state changes
+    this.authSubscription = this.authService.currentUser$.subscribe(user => {
+      if (user) {
+        this.loadFiles();
+        // Set up socket listener once when user is authenticated
+        this.setupSocketListener();
+      }
+    });
+  }
+
+  // Set up socket listener once to avoid multiple subscriptions
+  private setupSocketListener() {
+    // Only set up listeners once
+    if (this.socketSubscription || this.fileCreatedSubscription || this.fileDeletedSubscription) {
+      return;
+    }
+    
+    console.log('🔌 Setting up socket listeners...');
+    
+    // Set up single socket listener for document updates
+    this.socketSubscription = this.socketService.onDocumentUpdate().subscribe(updatedContent => {
+      if (this.fileContent !== updatedContent) {
+        this.fileContent = updatedContent;
+      }
+    });
+
+    // Set up socket listener for file creation events
+    this.fileCreatedSubscription = this.socketService.onFileCreated().subscribe(newFile => {
+      // Only show notification if this is not the current user's file
+      const currentUserId = this.authService.getCurrentUserId();
+      
+      if (currentUserId && newFile.ownerId !== currentUserId) {
+        // Show toaster notification
+        this.snackBar.open(
+          `📄 New file "${newFile.name}" was added by ${newFile.owner?.name || 'another user'}`, 
+          'Close', 
+          { 
+            duration: 5000,
+            panelClass: ['file-created-snackbar'],
+            horizontalPosition: 'center',
+            verticalPosition: 'bottom'
+          }
+        );
+        
+        // Refresh the files list if we're showing all files
+        if (this.showAllFiles) {
+          this.loadFiles();
+        }
+      }
+    });
+
+    // Set up socket listener for file deletion events
+    this.fileDeletedSubscription = this.socketService.onFileDeleted().subscribe(deletionInfo => {
+      console.log('🔔 File deletion event received:', deletionInfo);
+      const currentUserId = this.authService.getCurrentUserId();
+      console.log('🔔 Current user ID:', currentUserId, 'Deletion owner ID:', deletionInfo.ownerId);
+      
+      // Only show notification if this is not the current user's deletion
+      if (currentUserId && deletionInfo.ownerId !== currentUserId) {
+        console.log('🔔 Showing deletion notification for file:', deletionInfo.fileName);
+        // Show urgent toaster notification for file deletion
+        this.snackBar.open(
+          `⚠️ File "${deletionInfo.fileName}" was deleted by ${deletionInfo.ownerName}`, 
+          'Close', 
+          { 
+            duration: 8000, // Longer duration for urgent notifications
+            panelClass: ['urgent-deletion-snackbar'], // Custom styling for urgency
+            horizontalPosition: 'center',
+            verticalPosition: 'top'
+          }
+        );
+        
+        // Refresh the files list to remove the deleted file
+        this.loadFiles();
+      } else {
+        console.log('🔔 Not showing notification - same user or no current user');
+      }
+    });
+  }
+
+  loadFiles() {
+    if (this.showAllFiles) {
+      this.fileService.getAllFiles().subscribe({
+        next: (files) => {
+          this.files = files;
+          console.log('Loaded files:', files); // Debug logging
+        },
+        error: (error) => console.error('Error loading files:', error)
+      });
+    } else {
+      const userId = this.authService.getCurrentUserId();
+      if (!userId) {
+        console.warn('No user ID available'); // Debug logging
+        return;
+      }
+
+      this.fileService.getFilesByUser(userId).subscribe({
+        next: (files) => {
+          this.files = files;
+          console.log('Loaded user files:', files); // Debug logging
+        },
+        error: (error) => console.error('Error loading files:', error)
+      });
+    }
+  }
+
+  loadFile(id: string) {
+    this.fileService.getFileById(id).subscribe((file) => {
+      this.fileName = file.name;
+      this.fileContent = file.content;
+      this.selectedFileId = file.id;
+      this.isEditMode = true;
+
+      // Join the document room
+      this.socketService.joinDocument(id);
+      console.log(`Joined document room: ${id}`);
+    });
+  }
+
+  backToList() {
+    this.isEditMode = false;
+    this.selectedFileId = null;
+    this.fileName = '';
+    this.fileContent = '';
+  }
+
+  deleteFile(fileId: string, fileName: string) {
+    // Find the file to check ownership
+    const file = this.files.find(f => f.id === fileId);
+    if (!file || !this.isFileOwner(file)) {
+      this.snackBar.open('You can only delete files you own', 'Close', { duration: 3000 });
+      return;
+    }
+
+    if (confirm(`Are you sure you want to delete "${fileName}"? This action cannot be undone.`)) {
+      console.log('🗑️ Sending DELETE request for file:', fileId);
+      this.fileService.deleteFile(fileId).subscribe({
+        next: (response) => {
+          console.log('🗑️ DELETE request successful:', response);
+          this.snackBar.open(`File "${fileName}" deleted successfully`, 'Close', { duration: 3000 });
+          this.refreshFiles();
+        },
+        error: (error) => {
+          console.error('🗑️ Error deleting file:', error);
+          this.snackBar.open('Error deleting file', 'Close', { duration: 3000 });
+        }
+      });
+    }
+  }
+
+  isFileOwner(file: any): boolean {
+    const currentUserId = this.authService.getCurrentUserId();
+    return currentUserId === file.ownerId;
+  }
+
+  onEdit() {
+    if (this.selectedFileId) {
+      this.socketService.sendEdit(this.selectedFileId, this.fileContent);
+      this.refreshFiles();
+    }
+  }
+
+  saveFile() {
+    const userId = this.authService.getCurrentUserId();
+    
+    if (!userId) {
+      return;
+    }
+
+    const fileData = {
+      name: this.fileName,
+      content: this.fileContent,
+      ownerId: userId
+    };
+    
+    this.fileService.createFile(fileData).subscribe({
+      next: (file) => {
+        this.snackBar.open(`File "${file.name}" created successfully`, 'Close', { duration: 3000 });
+        this.refreshFiles();
+        this.backToList();
+      },
+      error: (error) => {
+        console.error('Error saving file:', error);
+        this.snackBar.open('Error creating file', 'Close', { duration: 3000 });
+      }
+    });
+  }
+
+  createNewFile() {
+    this.isEditMode = true;
+    this.selectedFileId = null;
+    this.fileName = '';
+    this.fileContent = '';
+  }
+
+
+  onContentChange() {
+    if (this.selectedFileId) {
+      console.log('Sending edit to document:', this.selectedFileId);
+      this.socketService.sendEdit(this.selectedFileId, this.fileContent);
+      
+      // Update the file in the database
+      this.fileService.updateFile(this.selectedFileId, {
+        content: this.fileContent
+      }).subscribe({
+        next: () => console.log('File updated in database'),
+        error: (error) => console.error('Error updating file:', error)
+      });
+    }
+  }
+
+  refreshFiles() {
+    this.loadFiles();
+  }
+
+  testDeletionNotification() {
+    console.log('🧪 Testing deletion notification...');
+    this.snackBar.open(
+      `⚠️ Test: File "test-file.txt" was deleted by Test User`, 
+      'Close', 
+      { 
+        duration: 8000,
+        panelClass: ['urgent-deletion-snackbar'],
+        horizontalPosition: 'center',
+        verticalPosition: 'top'
+      }
+    );
+  }
+
+  testBackendConnection() {
+    console.log('🧪 Testing backend connection...');
+    this.http.get('http://localhost:5000/test').subscribe({
+      next: (response) => {
+        console.log('🧪 Backend test successful:', response);
+        this.snackBar.open('Backend connection successful!', 'Close', { duration: 3000 });
+      },
+      error: (error) => {
+        console.error('🧪 Backend test failed:', error);
+        this.snackBar.open('Backend connection failed!', 'Close', { duration: 3000 });
+      }
+    });
+  }
+
+  // AI Assistant Methods
+  toggleAIAssistant() {
+    this.showAIAssistant = !this.showAIAssistant;
+  }
+
+  onSuggestionApplied(event: {original: string, suggestion: string}) {
+    // Replace the original text with the suggestion
+    this.fileContent = this.fileContent.replace(event.original, event.suggestion);
+    this.onContentChange();
+  }
+
+  onContentInserted(content: string) {
+    // Insert the generated content at the cursor position or at the end
+    this.fileContent += '\n\n' + content;
+    this.onContentChange();
+  }
+
+  ngOnDestroy() {
+    // Clean up all subscriptions when component is destroyed
+    if (this.socketSubscription) {
+      this.socketSubscription.unsubscribe();
+    }
+    if (this.authSubscription) {
+      this.authSubscription.unsubscribe();
+    }
+    if (this.fileCreatedSubscription) {
+      this.fileCreatedSubscription.unsubscribe();
+    }
+    if (this.fileDeletedSubscription) {
+      this.fileDeletedSubscription.unsubscribe();
+    }
+  }
+}

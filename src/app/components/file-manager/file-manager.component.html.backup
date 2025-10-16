@@ -1,0 +1,117 @@
+<mat-card class="file-manager">
+    <mat-card-header>
+      <mat-card-title>{{ isEditMode ? (selectedFileId ? 'Edit File' : 'Create New File') : (showAllFiles ? 'All Files' : 'My Files') }}</mat-card-title>
+    </mat-card-header>
+  
+    <mat-card-content>
+      <!-- List View -->
+      <div *ngIf="!isEditMode">
+        <div class="list-header">
+          <button mat-raised-button color="primary" (click)="createNewFile()">
+            <mat-icon>add</mat-icon>
+            Create New File
+          </button>
+          <button mat-raised-button color="warn" (click)="testDeletionNotification()">
+            <mat-icon>warning</mat-icon>
+            Test Deletion Alert
+          </button>
+          <button mat-raised-button color="accent" (click)="testBackendConnection()">
+            <mat-icon>network_check</mat-icon>
+            Test Backend
+          </button>
+        </div>
+        
+        <h3>{{ showAllFiles ? 'All Files' : 'My Files' }}</h3>
+        <div *ngIf="files.length > 0" style="margin-bottom: 10px; font-size: 12px; color: #666;">
+          Debug: {{ files.length }} files loaded. Current user ID: {{ authService.getCurrentUserId() }}
+        </div>
+        <mat-list>
+          <mat-list-item *ngFor="let file of files" class="file-item">
+            <mat-icon matListItemIcon>description</mat-icon>
+            <div matListItemTitle class="file-title" (click)="loadFile(file.id)">
+              {{ file.name }}
+              <span *ngIf="showAllFiles" class="owner-info">by {{ file.owner?.name || file.owner?.email || 'Unknown' }}</span>
+            </div>
+            <span matListItemLine>Click to Edit</span>
+            
+            <div matListItemMeta class="file-actions">
+              <button mat-icon-button (click)="loadFile(file.id)" matTooltip="Edit File">
+                <mat-icon>edit</mat-icon>
+              </button>
+              <button mat-icon-button 
+                      [disabled]="!isFileOwner(file)"
+                      [color]="isFileOwner(file) ? 'warn' : 'basic'"
+                      (click)="isFileOwner(file) ? deleteFile(file.id, file.name) : null" 
+                      [matTooltip]="isFileOwner(file) ? 'Delete File' : 'Only file owner can delete'"
+                      title="Delete button - Owner: {{ isFileOwner(file) ? 'Yes' : 'No' }}">
+                <mat-icon>delete</mat-icon>
+              </button>
+            </div>
+          </mat-list-item>
+        </mat-list>
+        
+        <div *ngIf="files.length === 0" class="no-files">
+          <mat-icon>folder_open</mat-icon>
+          <p>No files found</p>
+        </div>
+      </div>
+
+      <!-- Edit View -->
+      <div *ngIf="isEditMode">
+        <div class="edit-header">
+          <button mat-button (click)="backToList()">
+            <mat-icon>arrow_back</mat-icon>
+            Back to List
+          </button>
+          <button mat-raised-button color="accent" (click)="toggleAIAssistant()">
+            <mat-icon>psychology</mat-icon>
+            {{ showAIAssistant ? 'Hide' : 'Show' }} AI Assistant
+          </button>
+        </div>
+        
+        <div class="edit-content" [class.with-ai]="showAIAssistant">
+          <div class="editor-section">
+            <mat-form-field appearance="fill" class="full-width">
+              <mat-label>File Name</mat-label>
+              <input matInput [(ngModel)]="fileName" placeholder="Enter file name">
+            </mat-form-field>
+        
+            <mat-form-field appearance="fill" class="full-width">
+              <mat-label>File Content</mat-label>
+              <textarea matInput [(ngModel)]="fileContent" 
+                  (ngModelChange)="onContentChange()"
+                  placeholder="Enter content" rows="15">
+              </textarea>
+            </mat-form-field>
+        
+            <button mat-raised-button color="primary" (click)="saveFile()">
+              <mat-icon>save</mat-icon>
+              {{ selectedFileId ? 'Update File' : 'Create File' }}
+            </button>
+          </div>
+          
+          <div *ngIf="showAIAssistant" class="ai-section">
+            <app-ai-assistant 
+              [documentContent]="fileContent"
+              (suggestionApplied)="onSuggestionApplied($event)"
+              (contentInserted)="onContentInserted($event)">
+            </app-ai-assistant>
+          </div>
+        </div>
+      </div>
+    </mat-card-content>
+  </mat-card>
+
+<!-- <h2>File Manager</h2>
+
+<input type="text" [(ngModel)]="fileName" placeholder="File Name">
+<textarea [(ngModel)]="fileContent" placeholder="File Content"></textarea>
+
+<button (click)="saveFile()">Save File</button>
+
+<h3>Saved Files</h3>
+<ul>
+  <li *ngFor="let file of files" (click)="loadFile(file.id)">
+    {{ file.name }} (Click to Edit)
+  </li>
+</ul> -->

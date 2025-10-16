@@ -1,0 +1,304 @@
+import express from 'express';
+import cors from 'cors';
+import { Server as SocketServer } from 'socket.io';
+import { createServer } from 'http';
+import dotenv from 'dotenv';
+import { PrismaClient } from '@prisma/client';
+import userRoutes from './userRoutes';
+import { AIService, WritingSuggestion, AIChatMessage } from './aiService';
+
+dotenv.config();
+const app = express();
+const server = createServer(app);
+const io = new SocketServer(server, { cors: { origin: "*" } });
+
+const prisma = new PrismaClient();
+
+const activeUsers: Record<string, Record<string, string>> = {};
+
+app.use(cors());
+app.use(express.json());
+
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
+
+// Test endpoint
+app.get('/test', (req, res) => {
+  console.log('🧪 Test endpoint hit');
+  res.json({ message: 'Backend is working!', timestamp: new Date().toISOString() });
+});
+
+// ... existing imports ...
+
+app.post('/users/sync', async (req: any, res: any) => {
+  try {
+    const { firebaseId, email } = req.body;
+
+    if (!firebaseId || !email) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    // Try to find existing user or create new one
+    const user= await prisma.user.upsert({
+      where: { firebaseId: firebaseId },
+      update: { email }, // Update email if it changed
+      create: {
+        firebaseId,
+        email,
+        name: email.split('@')[0]
+      } 
+    });
+
+    res.json(user);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error syncing user" });
+  }
+});
+
+// Add this endpoint to get all files
+app.get('/files', async (req, res) => {
+  try {
+    const files = await prisma.file.findMany({
+      include: {
+        owner: {
+          select: {
+            email: true,
+            name: true
+          }
+        }
+      }
+    });
+    res.json(files);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error fetching files" });
+  }
+});
+
+app.post('/files', async (req:any, res:any) => {
+  try {
+    const { name, content, ownerId } = req.body;
+
+    if (!name || !content || !ownerId) {
+      return res.status(400).json({ message: "Missing fields" });
+    }
+
+    const file = await prisma.file.create({
+      data: { name, content, ownerId },
+      include: {
+        owner: {
+          select: {
+            email: true,
+            name: true
+          }
+        }
+      }
+    });
+
+    // Emit socket event to notify all connected users about new file
+    io.emit('file-created', file);
+
+    res.status(201).json(file);
+  } catch (error) {
+    console.error('Error in POST /files:', error);
+    res.status(500).json({ message: "Error creating file" });
+  }
+});
+
+app.get('/files/:ownerId', async (req, res) => {
+  try {
+    const { ownerId } = req.params;
+
+    const files = await prisma.file.findMany({
+      where: { ownerId }
+    });
+
+    res.json(files);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error fetching files" });
+  }
+});
+
+app.get('/file/:id', async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+
+    const file = await prisma.file.findUnique({
+      where: { id }
+    });
+
+    if (!file) {
+      return res.status(404).json({ message: "File not found" });
+    }
+
+    res.json(file);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error fetching file" });
+  }
+});
+
+app.put('/file/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, content } = req.body;
+
+    const updatedFile = await prisma.file.update({
+      where: { id },
+      data: { name, content }
+    });
+
+    res.json(updatedFile);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error updating file" });
+  }
+});
+
+app.delete('/file/:id', async (req: any, res: any) => {
+  console.log('🗑️ DELETE request received for file:', req.params.id);
+  try {
+    const { id } = req.params;
+
+    // Get file info before deleting for notification
+    const fileToDelete = await prisma.file.findUnique({
+      where: { id },
+      include: {
+        owner: {
+          select: {
+            email: true,
+            name: true
+          }
+        }
+      }
+    });
+
+    if (!fileToDelete) {
+      return res.status(404).json({ message: "File not found" });
+    }
+
+    await prisma.file.delete({
+      where: { id }
+    });
+
+    // Emit socket event to notify all connected users about file deletion
+    const deletionInfo = {
+      fileId: id,
+      fileName: fileToDelete.name,
+      ownerName: fileToDelete.owner?.name || fileToDelete.owner?.email || 'Unknown',
+      ownerId: fileToDelete.ownerId
+    };
+    console.log('🔔 Emitting file-deleted event:', deletionInfo);
+    io.emit('file-deleted', deletionInfo);
+
+    res.json({ message: "File deleted" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error deleting file" });
+  }
+});
+
+
+
+// Add routes
+app.use('/users', userRoutes);
+
+// Remove the duplicate socket connection handler and fix the typo
+io.on('connection', (socket) => {
+  console.log(`🟢 User connected: ${socket.id}`);
+
+  socket.on('join-document', (docId) => {
+    socket.join(docId);
+    console.log(`🟢 User ${socket.id} joined document: ${docId}`);
+  });
+
+  socket.on('edit-document', ({docId, content}) => {
+    console.log(`📝 Document ${docId} edited by ${socket.id}, broadcasting to others`);
+    socket.to(docId).emit('document-updated', content);
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+  });
+});
+
+// app.get('/users', async (req, res) => {
+//   const users = await prisma.user.findMany();
+//   res.json(users);
+// });
+
+// AI Writing Assistant Endpoints
+app.post('/ai/suggestions', async (req: any, res: any) => {
+  try {
+    const { text, context } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({ message: "Text is required" });
+    }
+
+    const suggestions = await AIService.getWritingSuggestions(text, context);
+    res.json({ suggestions });
+  } catch (error) {
+    console.error('Error getting AI suggestions:', error);
+    res.status(500).json({ message: "Error getting suggestions" });
+  }
+});
+
+app.post('/ai/generate', async (req: any, res: any) => {
+  try {
+    const { prompt, type } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ message: "Prompt is required" });
+    }
+
+    const content = await AIService.generateContent(prompt, type);
+    res.json({ content });
+  } catch (error) {
+    console.error('Error generating content:', error);
+    res.status(500).json({ message: "Error generating content" });
+  }
+});
+
+app.post('/ai/chat', async (req: any, res: any) => {
+  try {
+    const { message, documentContent, chatHistory } = req.body;
+    
+    if (!message || !documentContent) {
+      return res.status(400).json({ message: "Message and document content are required" });
+    }
+
+    const response = await AIService.chatWithDocument(message, documentContent, chatHistory);
+    res.json({ response });
+  } catch (error) {
+    console.error('Error in AI chat:', error);
+    res.status(500).json({ message: "Error processing chat message" });
+  }
+});
+
+app.post('/ai/analyze', async (req: any, res: any) => {
+  try {
+    const { content } = req.body;
+    
+    if (!content) {
+      return res.status(400).json({ message: "Content is required" });
+    }
+
+    const analysis = await AIService.analyzeDocument(content);
+    res.json(analysis);
+  } catch (error) {
+    console.error('Error analyzing document:', error);
+    res.status(500).json({ message: "Error analyzing document" });
+  }
+});
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🔌 Socket.IO server ready for connections`);
+});
