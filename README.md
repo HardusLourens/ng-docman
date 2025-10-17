@@ -1,4 +1,4 @@
-# 📝 DocClone - Collaborative Document Editor
+# 📝 ng-docman - Collaborative Document Editor
 
 A full-stack Google Docs clone built with Angular 17 and Node.js, featuring real-time collaboration, AI-powered assistance, and secure authentication.
 
